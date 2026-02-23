@@ -103,7 +103,7 @@ This project is released under the **GNU General Public License v3.0**, consiste
 - **Automatic CPU affinity configuration**
 - **Automatic MSR tweaks (Intel / AMD)**
 - **Automatic huge page configuration**
-- **TLS-enabled Stratum support**
+- **Auto Detected TLS stratum**
 - **Built-in HTTP JSON API**
 - **Background dataset reinitialization**
 - **Zero-downtime dev fee switching**
