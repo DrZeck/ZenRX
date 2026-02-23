@@ -99,14 +99,14 @@ This project is released under the **GNU General Public License v3.0**, consiste
 - **CPU-only architecture**
 - **RandomX optimized**
 - **MoneroOcean auto-switching**
-- Automatic L3 cache-based thread detection
-- Automatic CPU affinity configuration
-- Automatic MSR tweaks (Intel / AMD)
-- Automatic huge page configuration
-- TLS-enabled Stratum support
-- Built-in HTTP JSON API
-- Background dataset reinitialization
-- Zero-downtime dev fee switching
+- **Automatic L3 cache-based thread detection**
+- **Automatic CPU affinity configuration**
+- **Automatic MSR tweaks (Intel / AMD)**
+- **Automatic huge page configuration**
+- **TLS-enabled Stratum support**
+- **Built-in HTTP JSON API**
+- **Background dataset reinitialization**
+- **Zero-downtime dev fee switching**
 
 ---
 
