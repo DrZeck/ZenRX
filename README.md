@@ -115,7 +115,7 @@ This project is released under the **GNU General Public License v3.0**, consiste
 ## Mine on MoneroOcean (Auto-switching)
 
 ```
-./zenrx -o gulf.moneroocean.stream:20128 -u YOUR_WALLET -p x
+./zenrx -o gulf.moneroocean.stream:20128 -u YOUR_WALLET -p WORKER_NAME
 ```
 
 ## Mine on a specific pool
@@ -165,7 +165,7 @@ Configuration file: `zenrx.json`
         {
             "url": "gulf.moneroocean.stream:20128",
             "user": "YOUR_WALLET_ADDRESS",
-            "pass": "x"
+            "pass": "WORKER_NAME"
         }
     ],
     "algo": null,
