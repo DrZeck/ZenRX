@@ -25,21 +25,6 @@ Although optimized for ZenOS, ZenRX runs perfectly as a standalone CPU miner.
 
 ---
 
-# Philosophy
-
-ZenRX intentionally removes unnecessary complexity:
-
-- CPU-only
-- RandomX-only
-- Minimal architecture
-- Clean configuration model
-- Single stratum implementation
-- No GPU abstraction overhead
-
-The result is a focused, maintainable mining core.
-
----
-
 # Acknowledgments & Attribution
 
 ZenRX is derived from **XMRig**, https://github.com/xmrig
