@@ -8,7 +8,7 @@
 #include "version.h"
 
 extern "C" {
-#include "rx_deps/argon2/include/argon2.h"
+#include "crypto/argon2/include/argon2.h"
 }
 
 #include <csignal>
@@ -154,41 +154,74 @@ static void crashHandler(int sig)
 static constexpr int HUGEPAGES_RETRY_COUNT = 3;
 static constexpr int HUGEPAGES_RETRY_DELAY_MS = 500;
 
-static int64_t getHugePagesValue(const std::string& filename)
+static int64_t getHugePagesValue(const char* pageSize, const std::string& filename)
 {
-    std::vector<std::string> paths = {
-        "/sys/devices/system/node/node0/hugepages/hugepages-2048kB/" + filename,
-        "/sys/kernel/mm/hugepages/hugepages-2048kB/" + filename
-    };
-    
-    for (const auto& path : paths) {
+    // Try all NUMA nodes and sum their values
+    uint32_t nodes = cpu().numaNodes();
+    int64_t total = 0;
+    bool found = false;
+    for (uint32_t n = 0; n < nodes; n++) {
+        std::string path = "/sys/devices/system/node/node" + std::to_string(n)
+                         + "/hugepages/hugepages-" + pageSize + "/" + filename;
         std::ifstream file(path);
         if (file.is_open()) {
             int64_t value = 0;
             file >> value;
-            return value;
+            total += value;
+            found = true;
         }
+    }
+    if (found) return total;
+
+    // Fallback to global path
+    std::string path = std::string("/sys/kernel/mm/hugepages/hugepages-") + pageSize + "/" + filename;
+    std::ifstream file(path);
+    if (file.is_open()) {
+        int64_t value = 0;
+        file >> value;
+        return value;
     }
     return -1;
 }
 
-static int64_t getHugePages()
+static int64_t getHugePages(const char* pageSize)
 {
-    return getHugePagesValue("nr_hugepages");
+    return getHugePagesValue(pageSize, "nr_hugepages");
 }
 
-static int64_t getFreeHugePages()
+static int64_t getFreeHugePages(const char* pageSize)
 {
-    return getHugePagesValue("free_hugepages");
+    return getHugePagesValue(pageSize, "free_hugepages");
 }
 
-static bool writeHugePages(size_t count)
+static bool writeHugePages(const char* pageSize, size_t count)
 {
-    std::vector<std::string> paths = {
-        "/sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages",
-        "/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+    uint32_t nodes = cpu().numaNodes();
+    if (nodes > 1) {
+        // Multi-node: distribute evenly across all nodes
+        size_t perNode = count / nodes;
+        size_t remainder = count % nodes;
+        bool anySuccess = false;
+        for (uint32_t n = 0; n < nodes; n++) {
+            size_t nodeCount = perNode + (n < remainder ? 1 : 0);
+            std::string path = "/sys/devices/system/node/node" + std::to_string(n)
+                             + "/hugepages/hugepages-" + pageSize + "/nr_hugepages";
+            std::ofstream file(path, std::ios::out | std::ios::trunc);
+            if (file.is_open()) {
+                file << nodeCount;
+                file.flush();
+                if (file.good()) anySuccess = true;
+            }
+        }
+        return anySuccess;
+    }
+
+    // Single node: write to node0, fallback to global
+    std::string paths[] = {
+        std::string("/sys/devices/system/node/node0/hugepages/hugepages-") + pageSize + "/nr_hugepages",
+        std::string("/sys/kernel/mm/hugepages/hugepages-") + pageSize + "/nr_hugepages"
     };
-    
+
     for (const auto& path : paths) {
         std::ofstream file(path, std::ios::out | std::ios::trunc);
         if (file.is_open()) {
@@ -202,45 +235,45 @@ static bool writeHugePages(size_t count)
     return false;
 }
 
-static bool setupHugePages(size_t requiredPages)
+static bool setupHugePages(const char* pageSize, const char* label, size_t requiredPages)
 {
     for (int attempt = 0; attempt < HUGEPAGES_RETRY_COUNT; ++attempt) {
         if (attempt > 0) {
-            Log::debug("Hugepages setup retry %d/%d", attempt + 1, HUGEPAGES_RETRY_COUNT);
+            Log::debug("%s setup retry %d/%d", label, attempt + 1, HUGEPAGES_RETRY_COUNT);
             std::this_thread::sleep_for(std::chrono::milliseconds(HUGEPAGES_RETRY_DELAY_MS));
         }
-        
-        int64_t currentPages = getHugePages();
-        
+
+        int64_t currentPages = getHugePages(pageSize);
+
         if (currentPages >= static_cast<int64_t>(requiredPages)) {
-            int64_t freePages = getFreeHugePages();
+            int64_t freePages = getFreeHugePages(pageSize);
             if (freePages >= static_cast<int64_t>(requiredPages)) {
-                Log::debug("Hugepages: %ld allocated, %ld free", currentPages, freePages);
+                Log::debug("%s: %ld allocated, %ld free", label, currentPages, freePages);
                 return true;
             }
-            Log::debug("Hugepages: not enough free (%ld/%zu)", freePages, requiredPages);
+            Log::debug("%s: not enough free (%ld/%zu)", label, freePages, requiredPages);
         }
-        
-        if (!writeHugePages(requiredPages)) {
-            Log::debug("Failed to write hugepages value");
+
+        if (!writeHugePages(pageSize, requiredPages)) {
+            Log::debug("Failed to write %s value", label);
             continue;
         }
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        
-        int64_t allocated = getHugePages();
-        int64_t freePages = getFreeHugePages();
-        
-        if (allocated >= static_cast<int64_t>(requiredPages) && 
+
+        int64_t allocated = getHugePages(pageSize);
+        int64_t freePages = getFreeHugePages(pageSize);
+
+        if (allocated >= static_cast<int64_t>(requiredPages) &&
             freePages >= static_cast<int64_t>(requiredPages)) {
-            Log::debug("Hugepages: %ld allocated, %ld free", allocated, freePages);
+            Log::debug("%s: %ld allocated, %ld free", label, allocated, freePages);
             return true;
         }
-        
-        Log::debug("Hugepages incomplete: %ld/%zu (free: %ld)", allocated, requiredPages, freePages);
+
+        Log::debug("%s incomplete: %ld/%zu (free: %ld)", label, allocated, requiredPages, freePages);
     }
-    
-    Log::debug("Failed to allocate hugepages after %d attempts", HUGEPAGES_RETRY_COUNT);
+
+    Log::debug("Failed to allocate %s after %d attempts", label, HUGEPAGES_RETRY_COUNT);
     return false;
 }
 #endif
@@ -305,8 +338,22 @@ int App::run()
 
         Log::debug("Allocating %zu hugepages for %d max threads", requiredPages, m_config.maxThreads());
 
-        m_hugePagesOriginal = getHugePages();
-        m_config.hugePagesEnabled = setupHugePages(requiredPages);
+        m_hugePagesOriginal = getHugePages("2048kB");
+        m_config.hugePagesEnabled = setupHugePages("2048kB", "Hugepages", requiredPages);
+
+        // Try 1GB huge pages for dataset (reduces TLB misses significantly)
+        if (cpu().has1GbPages()) {
+            // Dataset ~2.03GB needs 3 x 1GB pages, cache ~256MB needs 1 x 1GB page
+            // Two instances (user + dev) = (3 + 1) * 2 = 8 pages minimum
+            const size_t required1GbPages = 8;
+            m_1gbHugePagesOriginal = getHugePages("1048576kB");
+            if (setupHugePages("1048576kB", "1GB hugepages", required1GbPages)) {
+                m_config.oneGbHugePagesEnabled = true;
+                Log::info("1GB hugepages: enabled (%zu pages)", required1GbPages);
+            } else {
+                Log::debug("1GB hugepages: not available, using 2MB pages");
+            }
+        }
 #endif
     } else {
         m_config.hugePagesEnabled = false;
@@ -443,6 +490,9 @@ void App::printCpuInfo()
     Log::debug("  Cores: %u | Threads: %u", cpuInfo.cores(), cpuInfo.threads());
     Log::debug("  L2: %zu KB | L3: %zu MB", 
              cpuInfo.L2() / 1024, cpuInfo.L3() / (1024 * 1024));
+    if (cpuInfo.numaNodes() > 1) {
+        Log::info("NUMA: %u nodes detected", cpuInfo.numaNodes());
+    }
     Log::debug("  AES: %s | AVX2: %s | AVX512: %s",
              cpuInfo.hasAES() ? "yes" : "no",
              cpuInfo.hasAVX2() ? "yes" : "no",
@@ -463,11 +513,12 @@ void App::printCpuInfo()
 
 void App::printSummary()
 {
-    Log::info("Threads: %d (%s) | MSR: %s | HugePages: %s",
+    Log::info("Threads: %d (%s) | MSR: %s | HugePages: %s | 1GB Pages: %s",
               m_config.threadsForAlgo(m_config.rxAlgo),
               rxAlgoName(m_config.rxAlgo),
               m_config.msrEnabled ? "ON" : "OFF",
-              m_config.hugePagesEnabled ? "ON" : "OFF");
+              m_config.hugePagesEnabled ? "ON" : "OFF",
+              m_config.oneGbHugePagesEnabled ? "ON" : "OFF");
 
     Log::info("Pool: %s:%d", m_config.pool.host.c_str(), m_config.pool.port);
 
@@ -479,14 +530,25 @@ void App::printSummary()
 void App::releaseHugePages()
 {
 #ifndef _WIN32
-    // Atomic exchange ensures only one caller performs the restore
+    // Restore 1GB hugepages
+    int64_t original1Gb = m_1gbHugePagesOriginal.exchange(-1);
+    if (original1Gb >= 0) {
+        const size_t restore = static_cast<size_t>(original1Gb);
+        if (writeHugePages("1048576kB", restore)) {
+            Log::debug("1GB hugepages restored to %zu", restore);
+        } else {
+            Log::debug("Failed to restore 1GB hugepages to %zu", restore);
+        }
+    }
+
+    // Restore 2MB hugepages
     int64_t original = m_hugePagesOriginal.exchange(-1);
     if (original < 0) {
         return;
     }
 
     const size_t restore = static_cast<size_t>(original);
-    if (writeHugePages(restore)) {
+    if (writeHugePages("2048kB", restore)) {
         Log::debug("Hugepages restored to %zu", restore);
     } else {
         Log::debug("Failed to restore hugepages to %zu", restore);

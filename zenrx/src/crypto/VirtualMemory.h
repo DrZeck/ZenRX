@@ -60,6 +60,8 @@ public:
     static void unprotectExecutableMemory(void *p, size_t size);
     static void protectRW(void *p, size_t size);
     static void protectRX(void *p, size_t size);
+    static void bindInterleave(void *p, size_t size);
+    static void bindToNode(void *p, size_t size, int node);
 
     static inline bool isHugepagesAvailable()                                { return (m_globalFlags & HUGEPAGES_AVAILABLE) != 0; }
     static inline constexpr size_t align(size_t pos, size_t align = 2097152) { return ((pos - 1) / align + 1) * align; }

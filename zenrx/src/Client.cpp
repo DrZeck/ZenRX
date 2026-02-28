@@ -1,4 +1,4 @@
-#include "net/Client.h"
+#include "Client.h"
 #include "Log.h"
 #include "Platform.h"
 #include "version.h"
@@ -359,7 +359,9 @@ bool Client::connect(const PoolConfig& pool)
 
     m_connected = true;
     m_lastActivity = std::chrono::steady_clock::now();
-    m_lastRecvTime = m_lastActivity;
+    m_lastRecvTime = std::chrono::steady_clock::now();
+    m_keepaliveInFlight = false;
+    m_missedKeepalives = 0;
 
     // Login
     if (!login()) return false;
@@ -565,20 +567,49 @@ void Client::run()
             continue;
         }
         
-        // Check if we need to send keepalive
         auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - m_lastActivity).count();
-        if (elapsed >= KEEPALIVE_INTERVAL && m_authenticated) {
-            sendKeepalive();
-        }
 
-        // Check for response timeout (no data received despite keepalives being sent)
-        auto recvElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - m_lastRecvTime).count();
-        if (recvElapsed >= RESPONSE_TIMEOUT && m_authenticated) {
-            if (!m_silent) Log::warn("No data received for %ds, connection appears dead", static_cast<int>(recvElapsed));
-            disconnect();
-            if (m_onDisconnected) m_onDisconnected();
-            continue;
+        if (m_authenticated) {
+            // Step 1: Check if an in-flight keepalive timed out
+            if (m_keepaliveInFlight) {
+                auto waitTime = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - m_keepaliveSentTime).count();
+
+                if (waitTime >= KEEPALIVE_RESPONSE_TIMEOUT) {
+                    m_missedKeepalives++;
+                    m_keepaliveInFlight = false;
+
+                    if (!m_silent) Log::warn("Keepalive timeout (%d/%d missed)",
+                                              m_missedKeepalives, MAX_MISSED_KEEPALIVES);
+
+                    if (m_missedKeepalives >= MAX_MISSED_KEEPALIVES) {
+                        auto silenceTime = std::chrono::duration_cast<std::chrono::seconds>(
+                            now - m_lastRecvTime).count();
+
+                        if (silenceTime >= SILENCE_TIMEOUT) {
+                            if (!m_silent) Log::warn("Connection dead: no data for %llds",
+                                                      static_cast<long long>(silenceTime));
+                            disconnect();
+                            if (m_onDisconnected) m_onDisconnected();
+                            continue;
+                        }
+                        // Pool alive (sending jobs) but doesn't respond to keepalive — reset and continue
+                        if (!m_silent) Log::info("Pool does not support keepalive, using silence timeout (%llds remaining)",
+                                                  static_cast<long long>(SILENCE_TIMEOUT - silenceTime));
+                        m_missedKeepalives = 0;
+                    }
+                    m_lastActivity = now;  // reset idle timer for next keepalive
+                }
+            }
+
+            // Step 2: If idle and no keepalive in flight, send one
+            if (!m_keepaliveInFlight) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - m_lastActivity).count();
+                if (elapsed >= KEEPALIVE_INTERVAL) {
+                    sendKeepalive();
+                }
+            }
         }
 
 #ifdef _WIN32
@@ -633,9 +664,11 @@ void Client::run()
                 continue;
             }
 
-            // Update last activity time on received data
+            // Any data received proves connection is alive
             m_lastActivity = std::chrono::steady_clock::now();
-            m_lastRecvTime = m_lastActivity;
+            m_lastRecvTime = std::chrono::steady_clock::now();
+            m_keepaliveInFlight = false;
+            m_missedKeepalives = 0;
 
             if (m_tls && m_ssl) {
                 // Feed raw bytes into the read BIO, then decrypt via SSL_read
@@ -694,11 +727,12 @@ void Client::sendKeepalive()
 {
     // Send keepalive using JSON-RPC keepalive method
     std::stringstream ss;
-    ss << "{\"id\":" << m_submitId++ << ",\"jsonrpc\":\"2.0\",\"method\":\"keepalive\"}\n";
+    ss << "{\"id\":0,\"jsonrpc\":\"2.0\",\"method\":\"keepalived\",\"params\":{\"id\":\"" << m_rpcId << "\"}}\n";
     
     if (send(ss.str())) {
-        m_lastActivity = std::chrono::steady_clock::now();
-        Log::debug("Sent keepalive");
+        m_keepaliveSentTime = std::chrono::steady_clock::now();
+        m_keepaliveInFlight = true;
+        Log::debug("Sent keepalive (missed so far: %d)", m_missedKeepalives);
     }
 }
 
@@ -711,9 +745,20 @@ void Client::handleMessage(const std::string& message)
 {
     Log::debug("Received: %s", message.c_str());
     
-    // Check for error
-    if (message.find("\"error\"") != std::string::npos && 
-        message.find("\"error\":null") == std::string::npos) {
+    // Check for error — whitespace-tolerant check for "error": null
+    bool hasRealError = false;
+    size_t errorPos = message.find("\"error\"");
+    if (errorPos != std::string::npos) {
+        size_t colonPos = message.find(':', errorPos + 7);
+        if (colonPos != std::string::npos) {
+            size_t valPos = message.find_first_not_of(" \t", colonPos + 1);
+            if (valPos != std::string::npos && message.substr(valPos, 4) != "null") {
+                hasRealError = true;
+            }
+        }
+    }
+
+    if (hasRealError) {
         std::string error = jsonGetString(message, "message");
         if (error.empty()) {
             error = "Unknown error";
@@ -768,6 +813,8 @@ void Client::handleMessage(const std::string& message)
             } else {
                 Log::debug("Dev share accepted [%lu/%lu]", m_accepted.load(), m_rejected.load());
             }
+        } else {
+            Log::debug("Unrecognized submit response: %s", message.c_str());
         }
     }
 }

@@ -1,14 +1,16 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-#include "net/Job.h"
+#include "Job.h"
 
 namespace zenrx {
 
@@ -62,6 +64,10 @@ private:
     SubmitCallback m_onSubmit;
 
     int64_t m_affinity = -1;
+
+    // Condition variable for pause/resume (replaces sleep-polling)
+    std::mutex m_pauseMutex;
+    std::condition_variable m_pauseCv;
 
     // Starting nonce for this worker
     uint32_t m_nonceStart = 0;

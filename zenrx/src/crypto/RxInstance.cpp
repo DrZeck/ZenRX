@@ -89,8 +89,52 @@ int RxInstance::detectFlags(bool hardwareAES)
     return flags;
 }
 
+void RxInstance::destroyVMs()
+{
+    for (auto* vm : m_vms) {
+        if (vm) randomx_destroy_vm(vm);
+    }
+    m_vms.clear();
+
+    for (auto* sp : m_scratchpads) {
+        delete sp;
+    }
+    m_scratchpads.clear();
+}
+
+bool RxInstance::createVMs(int threads, int vmFlags, const std::vector<int32_t>& numaNodes)
+{
+    m_vms.resize(threads);
+    m_scratchpads.resize(threads);
+
+    for (int i = 0; i < threads; i++) {
+        m_scratchpads[i] = new zenrx::VirtualMemory(
+            RandomX_CurrentConfig.ScratchpadL3_Size, m_allocatedWithHugePages);
+
+        int32_t node = (i < static_cast<int>(numaNodes.size())) ? numaNodes[i] : 0;
+
+        // Bind scratchpad to the worker's local NUMA node
+        if (cpu().numaNodes() > 1 && m_scratchpads[i]->scratchpad() && node >= 0) {
+            zenrx::VirtualMemory::bindToNode(m_scratchpads[i]->scratchpad(),
+                                             m_scratchpads[i]->size(), node);
+        }
+
+        m_vms[i] = randomx_create_vm(
+            static_cast<randomx_flags>(vmFlags),
+            m_cache, m_dataset,
+            m_scratchpads[i]->scratchpad(), static_cast<uint32_t>(node));
+
+        if (!m_vms[i]) {
+            Log::error("Failed to create RandomX VM %d", i);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
-                      bool hugePages, bool hardwareAES, int initThreads)
+                      bool hugePages, bool hardwareAES, int initThreads,
+                      bool oneGbPages, const std::vector<int32_t>& numaNodes)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -99,15 +143,7 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
     }
 
     if (m_initialized) {
-        for (auto* vm : m_vms) {
-            if (vm) randomx_destroy_vm(vm);
-        }
-        m_vms.clear();
-
-        for (auto* sp : m_scratchpads) {
-            delete sp;
-        }
-        m_scratchpads.clear();
+        destroyVMs();
 
         if (m_dataset) {
             randomx_release_dataset(m_dataset);
@@ -143,6 +179,7 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
         m_seedHash.clear();
         m_allocatedWithHugePages = false;
         m_cacheAllocatedWithHugePages = false;
+        m_using1GbPages = false;
     }
 
     m_seedHash = seedHash;
@@ -180,6 +217,11 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
 
     m_cacheAllocatedWithHugePages = useHugePages;
 
+    // NUMA-interleave cache memory across all nodes for balanced latency
+    if (cpu().numaNodes() > 1 && m_cacheMemory) {
+        zenrx::VirtualMemory::bindInterleave(m_cacheMemory, m_cacheMemorySize);
+    }
+
     m_cache = randomx_create_cache(static_cast<randomx_flags>(flags | RANDOMX_FLAG_JIT), m_cacheMemory);
     if (!m_cache) {
         Log::error("Failed to create RandomX cache");
@@ -199,10 +241,30 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
     // For rx/0: 2147483648 + 33554368 = ~2.03GB
     m_datasetMemorySize = static_cast<size_t>(RandomX_CurrentConfig.DatasetBaseSize) +
                           RandomX_ConfigurationBase::DatasetExtraSize;
-    if (useHugePages) {
+
+    // Try 1GB huge pages first (reduces TLB misses: 3 entries vs ~1024 for 2MB pages)
+    if (useHugePages && oneGbPages) {
+        // Round up to 1GB boundary
+        constexpr size_t ONE_GB = 1ULL << 30;
+        size_t alignedSize = ((m_datasetMemorySize + ONE_GB - 1) / ONE_GB) * ONE_GB;
+        m_datasetMemory = static_cast<uint8_t*>(
+            zenrx::VirtualMemory::allocateLargePagesMemory(alignedSize, 1024));
+        if (m_datasetMemory) {
+            m_datasetMemorySize = alignedSize;
+            m_using1GbPages = true;
+            Log::info("Dataset allocated with 1GB hugepages (%zu GB)", alignedSize / ONE_GB);
+        } else {
+            Log::debug("1GB hugepages failed for dataset, falling back to 2MB");
+        }
+    }
+
+    // Fall back to 2MB huge pages
+    if (!m_datasetMemory && useHugePages) {
         m_datasetMemory = static_cast<uint8_t*>(
             zenrx::VirtualMemory::allocateLargePagesMemory(m_datasetMemorySize));
     }
+
+    // Fall back to regular malloc
     if (!m_datasetMemory) {
         if (useHugePages) {
             Log::debug("Dataset hugepages failed, retrying without");
@@ -221,6 +283,12 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
         }
         m_cacheMemory = nullptr;
         return false;
+    }
+
+    // NUMA-interleave dataset memory across all nodes for balanced latency
+    if (cpu().numaNodes() > 1 && m_datasetMemory) {
+        zenrx::VirtualMemory::bindInterleave(m_datasetMemory, m_datasetMemorySize);
+        Log::debug("Dataset NUMA interleaved across %u nodes", cpu().numaNodes());
     }
 
     m_dataset = randomx_create_dataset(m_datasetMemory);
@@ -257,34 +325,22 @@ bool RxInstance::init(const std::string& seedHash, int threads, RxAlgo algo,
     }
 
     // Create VMs with externally managed scratchpads
-    m_vms.resize(threads);
-    m_scratchpads.resize(threads);
-
-    for (int i = 0; i < threads; i++) {
-        m_scratchpads[i] = new zenrx::VirtualMemory(
-            RandomX_CurrentConfig.ScratchpadL3_Size, m_allocatedWithHugePages);
-
-        m_vms[i] = randomx_create_vm(
-            static_cast<randomx_flags>(vmFlags),
-            m_cache, m_dataset,
-            m_scratchpads[i]->scratchpad(), 0);
-
-        if (!m_vms[i]) {
-            Log::error("Failed to create RandomX VM %d", i);
-            release();
-            return false;
-        }
+    if (!createVMs(threads, vmFlags, numaNodes)) {
+        release();
+        return false;
     }
 
     m_initialized = true;
 
-    Log::debug("RandomX initialized | algo: %s | hugepages: %s | JIT: yes",
-               rxAlgoName(algo), m_allocatedWithHugePages ? "yes" : "no");
+    Log::debug("RandomX initialized | algo: %s | hugepages: %s | 1GB pages: %s | JIT: yes",
+               rxAlgoName(algo), m_allocatedWithHugePages ? "yes" : "no",
+               m_using1GbPages ? "yes" : "no");
 
     return true;
 }
 
-bool RxInstance::reinit(const std::string& seedHash, int threads, bool hardwareAES, int initThreads)
+bool RxInstance::reinit(const std::string& seedHash, int threads, bool hardwareAES,
+                        int initThreads, const std::vector<int32_t>& numaNodes)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -297,15 +353,7 @@ bool RxInstance::reinit(const std::string& seedHash, int threads, bool hardwareA
         return false;
     }
 
-    for (auto* vm : m_vms) {
-        if (vm) randomx_destroy_vm(vm);
-    }
-    m_vms.clear();
-
-    for (auto* sp : m_scratchpads) {
-        delete sp;
-    }
-    m_scratchpads.clear();
+    destroyVMs();
 
     m_seedHash = seedHash;
     m_hardwareAES = hardwareAES;
@@ -328,29 +376,9 @@ bool RxInstance::reinit(const std::string& seedHash, int threads, bool hardwareA
         vmFlags |= RANDOMX_FLAG_AMD;
     }
 
-    m_vms.resize(threads);
-    m_scratchpads.resize(threads);
-
-    for (int i = 0; i < threads; i++) {
-        m_scratchpads[i] = new zenrx::VirtualMemory(
-            RandomX_CurrentConfig.ScratchpadL3_Size, m_allocatedWithHugePages);
-
-        m_vms[i] = randomx_create_vm(
-            static_cast<randomx_flags>(vmFlags),
-            m_cache, m_dataset,
-            m_scratchpads[i]->scratchpad(), 0);
-
-        if (!m_vms[i]) {
-            Log::error("Failed to create RandomX VM %d during reinit", i);
-            // Clean up partially created VMs and scratchpads
-            for (int j = 0; j <= i; j++) {
-                if (m_vms[j]) randomx_destroy_vm(m_vms[j]);
-                if (m_scratchpads[j]) delete m_scratchpads[j];
-            }
-            m_vms.clear();
-            m_scratchpads.clear();
-            return false;
-        }
+    if (!createVMs(threads, vmFlags, numaNodes)) {
+        destroyVMs();
+        return false;
     }
 
     m_initialized = true;
@@ -463,6 +491,7 @@ void RxInstance::release()
     m_initialized = false;
     m_allocatedWithHugePages = false;
     m_cacheAllocatedWithHugePages = false;
+    m_using1GbPages = false;
     m_seedHash.clear();
 }
 

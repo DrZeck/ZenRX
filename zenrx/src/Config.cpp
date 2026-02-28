@@ -47,6 +47,31 @@ static bool detectAndStripScheme(std::string& url)
     return false;
 }
 
+// Extract a JSON value for a given key from a JSON-like string.
+// Handles both quoted string values and bare (number/boolean) values.
+static std::string jsonGetValue(const std::string& content, const std::string& key)
+{
+    std::string search = "\"" + key + "\"";
+    size_t pos = content.find(search);
+    if (pos == std::string::npos) return "";
+
+    pos = content.find(':', pos);
+    if (pos == std::string::npos) return "";
+
+    pos = content.find_first_not_of(" \t\n\r", pos + 1);
+    if (pos == std::string::npos) return "";
+
+    if (content[pos] == '"') {
+        size_t end = content.find('"', pos + 1);
+        return content.substr(pos + 1, end - pos - 1);
+    } else {
+        size_t end = content.find_first_of(",}\n", pos);
+        std::string val = content.substr(pos, end - pos);
+        while (!val.empty() && isspace(val.back())) val.pop_back();
+        return val;
+    }
+}
+
 void Config::printVersion()
 {
     printf("%s\n", APP_VERSION_FULL);
@@ -286,27 +311,9 @@ bool Config::parseFile(const std::string& path)
     buffer << file.rdbuf();
     std::string content = buffer.str();
     
-    // Simple JSON parsing (basic implementation)
+    // Simple JSON parsing using the static jsonGetValue helper
     auto getValue = [&content](const std::string& key) -> std::string {
-        std::string search = "\"" + key + "\"";
-        size_t pos = content.find(search);
-        if (pos == std::string::npos) return "";
-        
-        pos = content.find(':', pos);
-        if (pos == std::string::npos) return "";
-        
-        pos = content.find_first_not_of(" \t\n\r", pos + 1);
-        if (pos == std::string::npos) return "";
-        
-        if (content[pos] == '"') {
-            size_t end = content.find('"', pos + 1);
-            return content.substr(pos + 1, end - pos - 1);
-        } else {
-            size_t end = content.find_first_of(",}\n", pos);
-            std::string val = content.substr(pos, end - pos);
-            while (!val.empty() && isspace(val.back())) val.pop_back();
-            return val;
-        }
+        return jsonGetValue(content, key);
     };
     
     // Parse pools array - take the first pool entry
@@ -340,25 +347,7 @@ bool Config::parseFile(const std::string& path)
                 std::string poolObj = poolsContent.substr(pos, objEnd - pos);
 
                 auto getPoolValue = [&poolObj](const std::string& key) -> std::string {
-                    std::string search = "\"" + key + "\"";
-                    size_t keyPos = poolObj.find(search);
-                    if (keyPos == std::string::npos) return "";
-
-                    keyPos = poolObj.find(':', keyPos);
-                    if (keyPos == std::string::npos) return "";
-
-                    keyPos = poolObj.find_first_not_of(" \t\n\r", keyPos + 1);
-                    if (keyPos == std::string::npos) return "";
-
-                    if (poolObj[keyPos] == '"') {
-                        size_t end = poolObj.find('"', keyPos + 1);
-                        return poolObj.substr(keyPos + 1, end - keyPos - 1);
-                    } else {
-                        size_t end = poolObj.find_first_of(",}\n", keyPos);
-                        std::string val = poolObj.substr(keyPos, end - keyPos);
-                        while (!val.empty() && isspace(val.back())) val.pop_back();
-                        return val;
-                    }
+                    return jsonGetValue(poolObj, key);
                 };
 
                 std::string url = getPoolValue("url");
@@ -429,25 +418,7 @@ bool Config::parseFile(const std::string& path)
             
             // Parse from http block
             auto getHttpValue = [&httpBlock](const std::string& key) -> std::string {
-                std::string search = "\"" + key + "\"";
-                size_t pos = httpBlock.find(search);
-                if (pos == std::string::npos) return "";
-                
-                pos = httpBlock.find(':', pos);
-                if (pos == std::string::npos) return "";
-                
-                pos = httpBlock.find_first_not_of(" \t\n\r", pos + 1);
-                if (pos == std::string::npos) return "";
-                
-                if (httpBlock[pos] == '"') {
-                    size_t end = httpBlock.find('"', pos + 1);
-                    return httpBlock.substr(pos + 1, end - pos - 1);
-                } else {
-                    size_t end = httpBlock.find_first_of(",}\n", pos);
-                    std::string val = httpBlock.substr(pos, end - pos);
-                    while (!val.empty() && isspace(val.back())) val.pop_back();
-                    return val;
-                }
+                return jsonGetValue(httpBlock, key);
             };
             
             std::string enabledStr = getHttpValue("enabled");
@@ -518,22 +489,7 @@ bool Config::parseFile(const std::string& path)
             std::string cpuBlock = content.substr(cpuStart, cpuEnd - cpuStart + 1);
 
             auto getCpuValue = [&cpuBlock](const std::string& key) -> std::string {
-                std::string search = "\"" + key + "\"";
-                size_t pos = cpuBlock.find(search);
-                if (pos == std::string::npos) return "";
-                pos = cpuBlock.find(':', pos);
-                if (pos == std::string::npos) return "";
-                pos = cpuBlock.find_first_not_of(" \t\n\r", pos + 1);
-                if (pos == std::string::npos) return "";
-                if (cpuBlock[pos] == '"') {
-                    size_t end = cpuBlock.find('"', pos + 1);
-                    return cpuBlock.substr(pos + 1, end - pos - 1);
-                } else {
-                    size_t end = cpuBlock.find_first_of(",}\n", pos);
-                    std::string val = cpuBlock.substr(pos, end - pos);
-                    while (!val.empty() && isspace(val.back())) val.pop_back();
-                    return val;
-                }
+                return jsonGetValue(cpuBlock, key);
             };
 
             std::string argon2Str = getCpuValue("argon2-impl");

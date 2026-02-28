@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "impl-select.h"
-#include "rx_deps/argon2.h"
+#include "crypto/argon2.h"
 
 
 extern uint64_t uv_hrtime(void);

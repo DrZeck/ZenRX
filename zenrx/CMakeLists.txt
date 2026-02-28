@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zenrx VERSION 1.3.5 LANGUAGES C CXX ASM)
+project(zenrx VERSION 1.4.1 LANGUAGES C CXX ASM)
 
 # ==================================================
 # Language standards
@@ -15,6 +15,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(WITH_MSR "Enable MSR support" ON)
 option(WITH_ICON "Include Windows icon resource" OFF)
 option(BUILD_STATIC "Build static executable" ON)
+option(WITH_NATIVE_CPU "Use -march=native for CPU-specific optimizations" OFF)
+option(WITH_LTO "Enable Link-Time Optimization" OFF)
 
 # ==================================================
 # OS detection
@@ -42,6 +44,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -pipe)
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         add_compile_options(-O3 -DNDEBUG)
+        if(WITH_NATIVE_CPU)
+            add_compile_options(-march=native)
+        endif()
     endif()
 endif()
 
@@ -122,9 +127,23 @@ message(STATUS "libuv include:   ${UV_INCLUDE_DIR}")
 message(STATUS "libuv library:   ${UV_LIBRARY}")
 
 # ==================================================
+# Link-Time Optimization
+# ==================================================
+if(WITH_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT LTO_ERROR)
+    if(LTO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        message(STATUS "LTO enabled")
+    else()
+        message(WARNING "LTO not supported: ${LTO_ERROR}")
+    endif()
+endif()
+
+# ==================================================
 # Argon2 (SIMD-optimized, required by RandomX)
 # ==================================================
-add_subdirectory(src/rx_deps/argon2)
+add_subdirectory(src/crypto/argon2)
 
 # ==================================================
 # RandomX (embedded implementation)
@@ -183,15 +202,14 @@ set(SOURCES
     src/main.cpp
     src/App.cpp
     src/Config.cpp
-    src/Log.cpp
     src/Miner.cpp
     src/Worker.cpp
     src/CpuInfo.cpp
     src/Msr.cpp
     src/Api.cpp
     src/MoBenchmark.cpp
-    src/net/Client.cpp
-    src/net/Job.cpp
+    src/Client.cpp
+    src/Job.cpp
     src/crypto/RandomX.cpp
     src/crypto/RxInstance.cpp
     ${RANDOMX_SOURCES}
@@ -209,8 +227,8 @@ set(HEADERS
     src/MoBenchmark.h
     src/Platform.h
     src/version.h
-    src/net/Client.h
-    src/net/Job.h
+    src/Client.h
+    src/Job.h
     src/crypto/RandomX.h
     src/crypto/RxInstance.h
 )
@@ -233,8 +251,8 @@ add_executable(zenrx ${SOURCES} ${HEADERS} ${WIN_RESOURCES})
 
 target_include_directories(zenrx PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/rx_deps/argon2/include
-    ${CMAKE_SOURCE_DIR}/src/rx_deps/argon2/lib
+    ${CMAKE_SOURCE_DIR}/src/crypto/argon2/include
+    ${CMAKE_SOURCE_DIR}/src/crypto/argon2/lib
     ${CMAKE_SOURCE_DIR}/src/crypto/randomx/blake2/avx2
     ${HWLOC_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
@@ -286,4 +304,6 @@ message(STATUS "  hwloc:     PreBuilt")
 message(STATUS "  OpenSSL:   PreBuilt")
 message(STATUS "  libuv:     PreBuilt")
 message(STATUS "  MSR:       ${WITH_MSR}")
+message(STATUS "  Native CPU: ${WITH_NATIVE_CPU}")
+message(STATUS "  LTO:       ${WITH_LTO}")
 message(STATUS "")

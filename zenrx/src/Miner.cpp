@@ -1,10 +1,23 @@
 #include "Miner.h"
 #include "Log.h"
+#include "CpuInfo.h"
 #include "crypto/RandomX.h"
 
 #include <thread>
 
 namespace zenrx {
+
+// Build per-worker NUMA node list from CPU affinity
+static std::vector<int32_t> buildNumaNodes(int threadCount, const std::vector<int32_t>& affinity)
+{
+    std::vector<int32_t> numaNodes;
+    numaNodes.reserve(threadCount);
+    for (int i = 0; i < threadCount; i++) {
+        int32_t cpuIdx = (i < static_cast<int>(affinity.size())) ? affinity[i] : -1;
+        numaNodes.push_back(cpuIdx >= 0 ? cpu().numaNodeForCpu(cpuIdx) : 0);
+    }
+    return numaNodes;
+}
 
 Miner::Miner(const Config& config)
     : m_config(config)
@@ -263,14 +276,18 @@ void Miner::onDevJob(const Job& job)
 {
     if (!job.seedHash().empty() && !randomx().isSeedValid(RxInstanceId::Dev, job.seedHash())) {
         Log::debug("Dev seed changed, reinitializing dev instance...");
-        
+
         int devThreads = m_config.threadsForAlgo(m_currentAlgo);
+        const auto& devAffinity = m_config.affinityForAlgo(m_currentAlgo);
+        auto devNumaNodes = buildNumaNodes(devThreads, devAffinity);
+
         auto* devInstance = randomx().getInstance(RxInstanceId::Dev);
         if (devInstance && devInstance->isInitialized()) {
-            if (!randomx().reinit(RxInstanceId::Dev, job.seedHash(), devThreads, true, -1)) {
+            if (!randomx().reinit(RxInstanceId::Dev, job.seedHash(), devThreads, true, -1, devNumaNodes)) {
                 Log::debug("Failed to reinit dev RandomX - trying full init");
                 if (!randomx().init(RxInstanceId::Dev, job.seedHash(), devThreads,
-                                   RxAlgo::RX_0, m_config.hugePagesEnabled, true, -1)) {
+                                   RxAlgo::RX_0, m_config.hugePagesEnabled, true, -1,
+                                   m_config.oneGbHugePagesEnabled, devNumaNodes)) {
                     Log::debug("Failed to initialize dev RandomX - dev fee disabled");
                     m_devFeeEnabled = false;
                     return;
@@ -278,7 +295,8 @@ void Miner::onDevJob(const Job& job)
             }
         } else {
             if (!randomx().init(RxInstanceId::Dev, job.seedHash(), devThreads,
-                               RxAlgo::RX_0, m_config.hugePagesEnabled, true, -1)) {
+                               RxAlgo::RX_0, m_config.hugePagesEnabled, true, -1,
+                               m_config.oneGbHugePagesEnabled, devNumaNodes)) {
                 Log::debug("Failed to initialize dev RandomX - dev fee disabled");
                 m_devFeeEnabled = false;
                 return;
@@ -485,16 +503,21 @@ void Miner::rxInitLoop()
         m_rxInitRunning = true;
         lock.unlock();
 
+        // Build per-worker NUMA node list from affinity
+        auto numaNodes = buildNumaNodes(req->threadCount, req->affinity);
+
         // Heavy operation — blocks for seconds, but NOT on network thread
         bool ok = randomx().init(RxInstanceId::User, req->job.seedHash(),
                                  req->threadCount, req->algo,
-                                 m_config.hugePagesEnabled, true, -1);
+                                 m_config.hugePagesEnabled, true, -1,
+                                 m_config.oneGbHugePagesEnabled, numaNodes);
 
         if (ok && m_devFeeEnabled && !m_rxInitialized) {
             Log::debug("Pre-allocating dev instance...");
             randomx().init(RxInstanceId::Dev, req->job.seedHash(),
                           req->threadCount, RxAlgo::RX_0,
-                          m_config.hugePagesEnabled, true, -1);
+                          m_config.hugePagesEnabled, true, -1,
+                          m_config.oneGbHugePagesEnabled, numaNodes);
             m_rxInitialized = true;
         }
 

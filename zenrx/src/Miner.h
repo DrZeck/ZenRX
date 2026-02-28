@@ -2,8 +2,8 @@
 
 #include "Config.h"
 #include "Worker.h"
-#include "net/Client.h"
-#include "net/Job.h"
+#include "Client.h"
+#include "Job.h"
 
 #include <array>
 #include <vector>

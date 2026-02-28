@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <cstdint>
+#include <atomic>
 
 namespace zenrx {
 
@@ -52,6 +53,22 @@ struct PoolConfig {
 };
 
 struct Config {
+    Config() = default;
+    Config(const Config& o)
+        : pool(o.pool), algoThreads(o.algoThreads), algoAffinities(o.algoAffinities),
+          algo(o.algo), rxAlgo(o.rxAlgo), algoSpecified(o.algoSpecified),
+          apiEnabled(o.apiEnabled), apiHost(o.apiHost), apiPort(o.apiPort),
+          algoPerf(o.algoPerf), benchAlgoTime(o.benchAlgoTime), algoMinTime(o.algoMinTime),
+          argon2Impl(o.argon2Impl),
+          msrEnabled(o.msrEnabled), hugePagesEnabled(o.hugePagesEnabled),
+          oneGbHugePagesEnabled(o.oneGbHugePagesEnabled),
+          autotuning(o.autotuning.load(std::memory_order_relaxed)),
+          autotuneAlgo(o.autotuneAlgo),
+          colors(o.colors), printTime(o.printTime), debug(o.debug), autosave(o.autosave),
+          logFile(o.logFile), configPath(o.configPath)
+    {}
+    Config& operator=(const Config&) = delete;
+
     // Pool settings
     PoolConfig pool;
 
@@ -86,7 +103,8 @@ struct Config {
     // System status (set at runtime)
     bool msrEnabled = false;      // True if MSR was successfully applied
     bool hugePagesEnabled = false; // True if huge pages were successfully set
-    volatile bool autotuning = false;    // True while algo-perf benchmark is running
+    bool oneGbHugePagesEnabled = false; // True if 1GB huge pages were successfully set
+    std::atomic<bool> autotuning{false}; // True while algo-perf benchmark is running
     const char* autotuneAlgo = nullptr;  // Currently benchmarking algo name (pointer to string literal)
     
     // Misc

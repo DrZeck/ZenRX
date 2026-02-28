@@ -5,20 +5,7 @@
 #include <atomic>
 #include <thread>
 
-#ifdef _WIN32
-#   ifndef _WIN32_WINNT
-#       define _WIN32_WINNT 0x0600
-#   endif
-#   ifndef WIN32_LEAN_AND_MEAN
-#       define WIN32_LEAN_AND_MEAN
-#   endif
-#   include <winsock2.h>
-    typedef SOCKET socket_t;
-#   define SOCKET_INVALID INVALID_SOCKET
-#else
-    typedef int socket_t;
-#   define SOCKET_INVALID -1
-#endif
+#include "Platform.h"
 
 namespace zenrx {
 

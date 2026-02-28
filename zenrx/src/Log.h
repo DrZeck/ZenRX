@@ -178,6 +178,7 @@ public:
     }
 
     static void error(const char* fmt, ...) {
+        if (s_level < LogLevel::Error) return;
         va_list args;
         va_start(args, fmt);
         char buf[1024];
@@ -187,6 +188,7 @@ public:
     }
 
     static void warn(const char* fmt, ...) {
+        if (s_level < LogLevel::Warning) return;
         va_list args;
         va_start(args, fmt);
         char buf[1024];
@@ -196,6 +198,7 @@ public:
     }
 
     static void info(const char* fmt, ...) {
+        if (s_level < LogLevel::Info) return;
         va_list args;
         va_start(args, fmt);
         char buf[1024];
@@ -205,6 +208,7 @@ public:
     }
 
     static void debug(const char* fmt, ...) {
+        if (s_level < LogLevel::Debug) return;
         va_list args;
         va_start(args, fmt);
         char buf[1024];

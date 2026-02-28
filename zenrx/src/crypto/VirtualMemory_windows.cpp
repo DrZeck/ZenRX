@@ -148,3 +148,17 @@ void zenrx::VirtualMemory::protectRX(void *p, size_t size)
     DWORD oldProtect;
     VirtualProtect(p, size, PAGE_EXECUTE_READ, &oldProtect);
 }
+
+
+void zenrx::VirtualMemory::bindInterleave(void *p, size_t size)
+{
+    // NUMA binding not implemented on Windows (mbind is Linux-only)
+    (void)p; (void)size;
+}
+
+
+void zenrx::VirtualMemory::bindToNode(void *p, size_t size, int node)
+{
+    // NUMA binding not implemented on Windows (mbind is Linux-only)
+    (void)p; (void)size; (void)node;
+}

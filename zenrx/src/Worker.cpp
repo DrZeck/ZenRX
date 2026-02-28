@@ -73,6 +73,7 @@ void Worker::stop()
 {
     m_running = false;
     m_paused = false;  // Unblock pause loop so thread can exit
+    m_pauseCv.notify_one();
 
     if (m_thread.joinable()) {
         m_thread.join();
@@ -90,6 +91,7 @@ void Worker::pause()
 void Worker::resume()
 {
     m_paused.store(false, std::memory_order_release);
+    m_pauseCv.notify_one();
 }
 
 void Worker::setJob(const Job& job)
@@ -121,13 +123,18 @@ void Worker::run()
     uint64_t localSequence = 0;
 
     while (m_running) {
-        // Spin-wait when paused (during RandomX dataset init)
+        // Wait when paused (during RandomX dataset init)
         if (m_paused.load(std::memory_order_acquire)) {
             m_pauseAck.store(true, std::memory_order_release);
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::unique_lock<std::mutex> lock(m_pauseMutex);
+            m_pauseCv.wait(lock, [this] {
+                return !m_paused.load(std::memory_order_acquire) || !m_running;
+            });
             continue;
         }
-        m_pauseAck.store(false, std::memory_order_release);
+        if (m_pauseAck.load(std::memory_order_relaxed)) {
+            m_pauseAck.store(false, std::memory_order_release);
+        }
 
         // Lock-free job check via double-buffer sequence number
         const uint64_t seq = m_jobSequence.load(std::memory_order_acquire);
@@ -187,9 +194,10 @@ void Worker::run()
         m_hashCount.fetch_add(1, std::memory_order_relaxed);
 
         // Check if hash meets target (hash corresponds to prevNonce)
-        uint64_t hashValue = *reinterpret_cast<uint64_t*>(hash + 24);
+        uint64_t hashValue;
+        memcpy(&hashValue, hash + 24, sizeof(hashValue));
 
-        if (hashValue < localJob.target()) {
+        if (__builtin_expect(hashValue < localJob.target(), 0)) {
             JobResult result;
             result.jobId = currentJobId;
             result.nonce = prevNonce;

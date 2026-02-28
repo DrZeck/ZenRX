@@ -186,6 +186,23 @@ void CpuInfo::detectTopology()
     int pkgCount = hwloc_get_nbobjs_by_type(m_topology, HWLOC_OBJ_PACKAGE);
     m_packages = pkgCount > 0 ? static_cast<uint32_t>(pkgCount) : 1;
     
+    // Detect NUMA nodes and build PU → NUMA node mapping
+    int numaCount = hwloc_get_nbobjs_by_type(m_topology, HWLOC_OBJ_NUMANODE);
+    if (numaCount > 0) {
+        m_numaNodes = static_cast<uint32_t>(numaCount);
+        for (int i = 0; i < numaCount; i++) {
+            hwloc_obj_t node = hwloc_get_obj_by_type(m_topology, HWLOC_OBJ_NUMANODE, i);
+            if (!node || !node->cpuset) continue;
+            int32_t nodeId = static_cast<int32_t>(node->os_index);
+            for (uint32_t p = 0; p < m_threads; p++) {
+                hwloc_obj_t pu = hwloc_get_obj_by_type(m_topology, HWLOC_OBJ_PU, p);
+                if (pu && hwloc_bitmap_isset(node->cpuset, pu->os_index)) {
+                    m_cpuToNode[static_cast<int32_t>(pu->os_index)] = nodeId;
+                }
+            }
+        }
+    }
+
     // Build CPU units list (for MSR writing)
     m_units.clear();
     for (uint32_t i = 0; i < m_threads; ++i) {
@@ -303,7 +320,7 @@ void CpuInfo::detectTopology()
         m_l2Cache = m_cores * 256 * 1024;
     }
     
-    Log::debug("hwloc: %u threads, %u cores, %u packages", m_threads, m_cores, m_packages);
+    Log::debug("hwloc: %u threads, %u cores, %u packages, %u NUMA nodes", m_threads, m_cores, m_packages, m_numaNodes);
     Log::debug("hwloc: L2=%zu KB, L3=%zu MB", m_l2Cache / 1024, m_l3Cache / (1024 * 1024));
 }
 
@@ -405,6 +422,12 @@ void CpuInfo::detectArch()
     }
 
     Log::debug("CPU arch: %d (family=0x%x model=0x%x)", m_arch, m_family, m_model);
+}
+
+int32_t CpuInfo::numaNodeForCpu(int32_t cpuIndex) const
+{
+    auto it = m_cpuToNode.find(cpuIndex);
+    return (it != m_cpuToNode.end()) ? it->second : 0;
 }
 
 std::vector<int32_t> CpuInfo::affinityForAlgo(RxAlgo rxAlgo) const

@@ -1,4 +1,4 @@
-/* Provides cpu_flags_has_* functions required by rx_deps/argon2 */
+/* Provides cpu_flags_has_* functions required by crypto/argon2 */
 
 #include <cpuid.h>
 #include <stdint.h>

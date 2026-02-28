@@ -30,6 +30,30 @@
 #include <cstdio>
 #include <cstdint>
 
+#ifdef __linux__
+#   include <sys/syscall.h>
+#   include <unistd.h>
+    // mbind constants (avoids libnuma-dev dependency)
+#   ifndef MPOL_INTERLEAVE
+#       define MPOL_INTERLEAVE 3
+#   endif
+#   ifndef MPOL_BIND
+#       define MPOL_BIND 2
+#   endif
+#   ifndef MPOL_MF_MOVE
+#       define MPOL_MF_MOVE (1 << 1)
+#   endif
+#   ifndef __NR_mbind
+#       define __NR_mbind 237
+#   endif
+    static long zenrx_mbind(void *addr, unsigned long len, int mode,
+                            const unsigned long *nodemask, unsigned long maxnode,
+                            unsigned flags)
+    {
+        return syscall(__NR_mbind, addr, len, mode, nodemask, maxnode, flags);
+    }
+#endif
+
 
 #include "crypto/mm_malloc.h"
 #include "crypto/VirtualMemory.h"
@@ -183,4 +207,28 @@ void zenrx::VirtualMemory::protectRW(void *p, size_t size)
 void zenrx::VirtualMemory::protectRX(void *p, size_t size)
 {
     mprotect(p, size, PROT_READ | PROT_EXEC);
+}
+
+
+void zenrx::VirtualMemory::bindInterleave(void *p, size_t size)
+{
+#ifdef __linux__
+    unsigned long maxNode = 64;
+    unsigned long nodemask[1] = { ~0UL };
+    zenrx_mbind(p, size, MPOL_INTERLEAVE, nodemask, maxNode, MPOL_MF_MOVE);
+#else
+    (void)p; (void)size;
+#endif
+}
+
+
+void zenrx::VirtualMemory::bindToNode(void *p, size_t size, int node)
+{
+#ifdef __linux__
+    if (node < 0 || node >= 64) return;
+    unsigned long nodemask[1] = { 1UL << node };
+    zenrx_mbind(p, size, MPOL_BIND, nodemask, 64, MPOL_MF_MOVE);
+#else
+    (void)p; (void)size; (void)node;
+#endif
 }

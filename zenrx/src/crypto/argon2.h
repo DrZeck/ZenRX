@@ -27,7 +27,7 @@
 #define ZENRX_3RDPARTY_ARGON2_H
 
 
-#include "rx_deps/argon2/include/argon2.h"
+#include "crypto/argon2/include/argon2.h"
 
 
 #endif /* ZENRX_3RDPARTY_ARGON2_H */

@@ -23,8 +23,10 @@ public:
     ~RxInstance();
 
     bool init(const std::string& seedHash, int threads, RxAlgo algo = RxAlgo::RX_0,
-              bool hugePages = true, bool hardwareAES = true, int initThreads = -1);
-    bool reinit(const std::string& seedHash, int threads, bool hardwareAES = true, int initThreads = -1);
+              bool hugePages = true, bool hardwareAES = true, int initThreads = -1,
+              bool oneGbPages = false, const std::vector<int32_t>& numaNodes = {});
+    bool reinit(const std::string& seedHash, int threads, bool hardwareAES = true,
+                int initThreads = -1, const std::vector<int32_t>& numaNodes = {});
 
     bool isValidForSeed(const std::string& seedHash) const;
     randomx_vm* getVM(int index);
@@ -39,6 +41,8 @@ public:
 private:
     void initDataset(int threads);
     void applyAlgoConfig(RxAlgo algo);
+    void destroyVMs();
+    bool createVMs(int threads, int vmFlags, const std::vector<int32_t>& numaNodes = {});
     static int detectFlags(bool hardwareAES);
 
     std::string m_seedHash;
@@ -56,6 +60,7 @@ private:
     bool m_hardwareAES = true;
     bool m_allocatedWithHugePages = false;      // Dataset hugepages
     bool m_cacheAllocatedWithHugePages = false;  // Cache hugepages (may differ from dataset)
+    bool m_using1GbPages = false;                // Dataset uses 1GB hugepages
     std::atomic<bool> m_initialized{false};
     mutable std::mutex m_mutex;
 };

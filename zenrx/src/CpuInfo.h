@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -92,6 +93,10 @@ public:
     // Returns PU os_indices: physical cores first, then HT, per-L3 distribution.
     std::vector<int32_t> affinityForAlgo(RxAlgo algo) const;
 
+    // NUMA
+    uint32_t numaNodes() const { return m_numaNodes; }
+    int32_t numaNodeForCpu(int32_t cpuIndex) const;
+
     // CPU units (for MSR writing)
     const std::vector<int32_t>& units() const { return m_units; }
     
@@ -126,6 +131,9 @@ private:
     CpuArch m_arch = ARCH_UNKNOWN;
 
     std::vector<int32_t> m_units;
+
+    uint32_t m_numaNodes = 1;
+    std::map<int32_t, int32_t> m_cpuToNode;  // PU os_index → NUMA node os_index
 
     hwloc_topology_t m_topology = nullptr;
 };

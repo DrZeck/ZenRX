@@ -8,8 +8,8 @@
 #define APP_COPYRIGHT "Copyright 2025-2026 ZenOS"
 
 #define APP_VER_MAJOR  1
-#define APP_VER_MINOR  3
-#define APP_VER_PATCH  5
+#define APP_VER_MINOR  4
+#define APP_VER_PATCH  1
 
 #define ZENRX_STRINGIFY(x) #x
 #define ZENRX_TOSTRING(x) ZENRX_STRINGIFY(x)

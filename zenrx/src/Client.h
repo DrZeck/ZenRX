@@ -9,25 +9,10 @@
 #include <mutex>
 #include <thread>
 
-#ifdef _WIN32
-#   ifndef _WIN32_WINNT
-#       define _WIN32_WINNT 0x0600
-#   endif
-#   ifndef WIN32_LEAN_AND_MEAN
-#       define WIN32_LEAN_AND_MEAN
-#   endif
-#   include <winsock2.h>
-#   include <ws2tcpip.h>
-#   include <mstcpip.h>
-    typedef SOCKET socket_t;
-#   define SOCKET_INVALID INVALID_SOCKET
-#else
-    typedef int socket_t;
-#   define SOCKET_INVALID -1
-#endif
+#include "Platform.h"
 
 #include "Config.h"
-#include "net/Job.h"
+#include "Job.h"
 #include <map>
 
 typedef struct ssl_st SSL;
@@ -106,9 +91,14 @@ private:
     
     // Keepalive
     std::chrono::steady_clock::time_point m_lastActivity;
+    std::chrono::steady_clock::time_point m_keepaliveSentTime;
     std::chrono::steady_clock::time_point m_lastRecvTime;
-    static constexpr int KEEPALIVE_INTERVAL = 45; // seconds
-    static constexpr int RESPONSE_TIMEOUT = 90;   // seconds without recv → dead
+    bool m_keepaliveInFlight = false;
+    int  m_missedKeepalives = 0;
+    static constexpr int KEEPALIVE_INTERVAL = 60;          // seconds idle before sending keepalive
+    static constexpr int KEEPALIVE_RESPONSE_TIMEOUT = 30;  // seconds to wait for any recv after keepalive
+    static constexpr int MAX_MISSED_KEEPALIVES = 3;        // consecutive misses before declaring dead
+    static constexpr int SILENCE_TIMEOUT = 300;            // seconds of total silence before disconnect
     
     std::atomic<uint64_t> m_submitId{1};
     

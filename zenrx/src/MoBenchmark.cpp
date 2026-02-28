@@ -4,7 +4,7 @@
 #include "crypto/RandomX.h"
 #include "crypto/randomx/randomx.h"
 #include "crypto/Algorithm.h"
-#include "net/Job.h"
+#include "Job.h"
 
 #include <thread>
 #include <chrono>

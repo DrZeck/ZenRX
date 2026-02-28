@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "rx_deps/argon2.h"
+#include "crypto/argon2.h"
 #include "encoding.h"
 #include "core.h"
 

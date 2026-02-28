@@ -34,7 +34,8 @@ private:
     std::unique_ptr<Miner> m_miner;
     std::unique_ptr<Api> m_api;
     std::atomic<bool> m_running{false};
-    std::atomic<int64_t> m_hugePagesOriginal{-1};  // Original nr_hugepages before we modified it
+    std::atomic<int64_t> m_hugePagesOriginal{-1};      // Original 2MB nr_hugepages before we modified it
+    std::atomic<int64_t> m_1gbHugePagesOriginal{-1};   // Original 1GB nr_hugepages before we modified it
 
     static App* s_instance;
     static std::atomic<bool> s_signaled;

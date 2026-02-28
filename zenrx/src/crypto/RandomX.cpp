@@ -37,68 +37,59 @@ bool RandomX::hasAVX2()
     return (ebx >> 5) & 1;
 }
 
+RxInstance* RandomX::resolve(RxInstanceId id) const
+{
+    switch (id) {
+    case RxInstanceId::User: return m_userInstance.get();
+    case RxInstanceId::Dev:  return m_devInstance.get();
+    }
+    return nullptr;
+}
+
 bool RandomX::init(RxInstanceId id, const std::string& seedHash, int threads,
-                   RxAlgo algo, bool hugePages, bool hardwareAES, int initThreads)
+                   RxAlgo algo, bool hugePages, bool hardwareAES, int initThreads,
+                   bool oneGbPages, const std::vector<int32_t>& numaNodes)
 {
     std::lock_guard<std::shared_mutex> lock(m_mutex);
 
-    RxInstance* instance = nullptr;
-
-    switch (id) {
-    case RxInstanceId::User:
-        if (!m_userInstance) {
-            m_userInstance = std::make_unique<RxInstance>();
+    if (!resolve(id)) {
+        switch (id) {
+        case RxInstanceId::User: m_userInstance = std::make_unique<RxInstance>(); break;
+        case RxInstanceId::Dev:  m_devInstance  = std::make_unique<RxInstance>(); break;
         }
-        instance = m_userInstance.get();
-        break;
-
-    case RxInstanceId::Dev:
-        if (!m_devInstance) {
-            m_devInstance = std::make_unique<RxInstance>();
-        }
-        instance = m_devInstance.get();
-        break;
     }
 
+    RxInstance* instance = resolve(id);
     if (!instance) {
         return false;
     }
 
-    return instance->init(seedHash, threads, algo, hugePages, hardwareAES, initThreads);
+    return instance->init(seedHash, threads, algo, hugePages, hardwareAES, initThreads, oneGbPages, numaNodes);
 }
 
 bool RandomX::init(const std::string& seedHash, int threads,
-                   RxAlgo algo, bool hugePages, bool hardwareAES, int initThreads)
+                   RxAlgo algo, bool hugePages, bool hardwareAES, int initThreads,
+                   bool oneGbPages, const std::vector<int32_t>& numaNodes)
 {
-    return init(RxInstanceId::User, seedHash, threads, algo, hugePages, hardwareAES, initThreads);
+    return init(RxInstanceId::User, seedHash, threads, algo, hugePages, hardwareAES, initThreads, oneGbPages, numaNodes);
 }
 
 bool RandomX::reinit(RxInstanceId id, const std::string& seedHash, int threads,
-                     bool hardwareAES, int initThreads)
+                     bool hardwareAES, int initThreads,
+                     const std::vector<int32_t>& numaNodes)
 {
     std::lock_guard<std::shared_mutex> lock(m_mutex);
 
-    RxInstance* instance = nullptr;
-
-    switch (id) {
-    case RxInstanceId::User:
-        instance = m_userInstance.get();
-        break;
-    case RxInstanceId::Dev:
-        instance = m_devInstance.get();
-        break;
-    }
-
+    RxInstance* instance = resolve(id);
     if (!instance) {
         return false;
     }
 
-    return instance->reinit(seedHash, threads, hardwareAES, initThreads);
+    return instance->reinit(seedHash, threads, hardwareAES, initThreads, numaNodes);
 }
 
 bool RandomX::isSeedValid(const std::string& seedHash) const
 {
-    // Legacy: check user instance
     return isSeedValid(RxInstanceId::User, seedHash);
 }
 
@@ -106,17 +97,7 @@ bool RandomX::isSeedValid(RxInstanceId id, const std::string& seedHash) const
 {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
 
-    const RxInstance* instance = nullptr;
-
-    switch (id) {
-    case RxInstanceId::User:
-        instance = m_userInstance.get();
-        break;
-    case RxInstanceId::Dev:
-        instance = m_devInstance.get();
-        break;
-    }
-
+    const RxInstance* instance = resolve(id);
     if (!instance) {
         return false;
     }
@@ -126,7 +107,6 @@ bool RandomX::isSeedValid(RxInstanceId id, const std::string& seedHash) const
 
 randomx_vm* RandomX::getVM(int index)
 {
-    // Legacy: get from user instance
     return getVM(RxInstanceId::User, index);
 }
 
@@ -134,17 +114,7 @@ randomx_vm* RandomX::getVM(RxInstanceId id, int index)
 {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
 
-    RxInstance* instance = nullptr;
-
-    switch (id) {
-    case RxInstanceId::User:
-        instance = m_userInstance.get();
-        break;
-    case RxInstanceId::Dev:
-        instance = m_devInstance.get();
-        break;
-    }
-
+    RxInstance* instance = resolve(id);
     if (!instance) {
         return nullptr;
     }
@@ -155,15 +125,7 @@ randomx_vm* RandomX::getVM(RxInstanceId id, int index)
 RxInstance* RandomX::getInstance(RxInstanceId id)
 {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
-
-    switch (id) {
-    case RxInstanceId::User:
-        return m_userInstance.get();
-    case RxInstanceId::Dev:
-        return m_devInstance.get();
-    }
-
-    return nullptr;
+    return resolve(id);
 }
 
 void RandomX::release()
@@ -185,19 +147,16 @@ void RandomX::release(RxInstanceId id)
 {
     std::lock_guard<std::shared_mutex> lock(m_mutex);
 
+    auto releaseOne = [](std::unique_ptr<RxInstance>& inst) {
+        if (inst) {
+            inst->release();
+            inst.reset();
+        }
+    };
+
     switch (id) {
-    case RxInstanceId::User:
-        if (m_userInstance) {
-            m_userInstance->release();
-            m_userInstance.reset();
-        }
-        break;
-    case RxInstanceId::Dev:
-        if (m_devInstance) {
-            m_devInstance->release();
-            m_devInstance.reset();
-        }
-        break;
+    case RxInstanceId::User: releaseOne(m_userInstance); break;
+    case RxInstanceId::Dev:  releaseOne(m_devInstance);  break;
     }
 }
 
